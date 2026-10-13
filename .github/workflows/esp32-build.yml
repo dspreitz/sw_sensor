@@ -1,0 +1,28 @@
+name: ESP32 build (temporary)
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [feature/captive-portal-266, master]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          fetch-depth: 0
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install esp32 core
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli core list
+          pip install esptool
+      - name: Build
+        run: cd sw_esp32 && python3 scripts/build_firmware.py 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+      - name: Warnings in the sketch
+        if: always()
+        run: grep -E "wlan_link/.*(warning|error)" sw_esp32/build.log || echo "none"
