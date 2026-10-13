@@ -22,6 +22,8 @@ jobs:
           echo "${{ matrix.sha256 }}  $a" | sha256sum -c
           mkdir -p ~/tc && tar xf $a -C ~/tc --strip-components=1
           echo "$HOME/tc/bin" >> $GITHUB_PATH
+      - name: Generate git-commit-version.h (pre-build step)
+        run: cd sw_stm32 && (bash scripts/create-git-info-header.sh || python3 scripts/create-git-info-header.py) && ls -la Core/Inc/git-commit-version.h
       - name: Compile all Release sources
         run: python3 compile_check.py | tee result.txt
       - uses: actions/upload-artifact@v4

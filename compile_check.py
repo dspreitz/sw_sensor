@@ -16,7 +16,15 @@ def options(kind):
     return o
 
 def paths(vals):
-    return ["-I" + ROOT + "/" + v.strip('"').replace("${workspace_loc:/${ProjName}/", "").rstrip("}") for v in vals]
+    out = []
+    for v in vals:
+        v = v.strip('"')
+        if v.startswith("${workspace_loc:/${ProjName}/"):
+            v = v[len("${workspace_loc:/${ProjName}/"):].rstrip("}")
+        elif v.startswith("../"):  # relative to the build directory sw_stm32/Release
+            v = v[3:]
+        out.append("-I" + ROOT + "/" + v)
+    return out
 
 def defines(vals):
     return ["-D" + v.replace(" ", "") for v in vals]
