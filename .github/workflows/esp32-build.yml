@@ -22,7 +22,13 @@ jobs:
           arduino-cli core list
           pip install esptool
       - name: Build
-        run: cd sw_esp32 && python3 scripts/build_firmware.py 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+        run: cd sw_esp32 && python3 scripts/build_firmware.py --flash-size 4M 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
       - name: Warnings in the sketch
         if: always()
         run: grep -E "wlan_link/.*(warning|error)" sw_esp32/build.log || echo "none"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp32-${{ strategy.job-index }}-${{ matrix.ref == 'master' && 'master' || 'portal' }}
+          path: |
+            sw_esp32/build/*.bin
+            sw_esp32/build.log
