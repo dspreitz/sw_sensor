@@ -33,7 +33,7 @@ pull request with the toolchain of the current releases and with the next
 one, and compares memory usage with the PR's base. It is a check, not a
 release build: ST's "GNU Tools for STM32" in STM32CubeIDE differ slightly
 from the Arm GNU Toolchain (for 0.7.6: identical RAM sections, flash about
-0.3% larger), so release images still come from `build_firmware.py`.
+0.6% smaller), so release images still come from `build_firmware.py`.
 
 ## Building the firmware
 - Either build it in STM32CubeIDE itself (Project -> Build Project, with the
