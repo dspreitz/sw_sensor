@@ -6,29 +6,39 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ref: [feature/captive-portal-266, master]
+        include:
+          - name: captive-portal-269
+            repository: dspreitz/sw_sensor
+            ref: feature/captive-portal-266
+          - name: master
+            repository: larus-breeze/sw_sensor
+            ref: master
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: ${{ matrix.repository }}
           ref: ${{ matrix.ref }}
           fetch-depth: 0
+      - name: Fetch upstream tags for the version string
+        run: git fetch --tags https://github.com/larus-breeze/sw_sensor.git
       - uses: arduino/setup-arduino-cli@v2
       - name: Install esp32 core
         run: |
           arduino-cli config init
           arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
           arduino-cli core update-index
-          arduino-cli core install esp32:esp32
-          arduino-cli core list
+          arduino-cli core install esp32:esp32@3.3.12
           pip install esptool
-      - name: Build
-        run: cd sw_esp32 && python3 scripts/build_firmware.py --flash-size 4M 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
-      - name: Warnings in the sketch
-        if: always()
-        run: grep -E "wlan_link/.*(warning|error)" sw_esp32/build.log || echo "none"
+      - name: Build (project defaults)
+        run: |
+          git log --oneline -1
+          cd sw_esp32 && python3 scripts/build_firmware.py 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+      - name: Checksums
+        run: cd build && ls -la && sha256sum *.bin | tee SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: esp32-${{ strategy.job-index }}-${{ matrix.ref == 'master' && 'master' || 'portal' }}
+          name: esp32-${{ matrix.name }}
           path: |
-            sw_esp32/build/*.bin
+            build/*.bin
+            build/SHA256SUMS
             sw_esp32/build.log
