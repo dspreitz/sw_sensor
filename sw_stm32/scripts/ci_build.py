@@ -207,7 +207,9 @@ def main():
         obj = out / (rel + ".o")
         obj.parent.mkdir(parents=True, exist_ok=True)
         cc = PREFIX + ("g++" if kind == "cpp.compiler" else "gcc")
-        cmd = [cc] + compile_flags(cfg, rel, kind, target, extra) + ["-c", str(SW_STM32_DIR / rel), "-o", str(obj)]
+        # relative source path like CubeIDE ("../Core/Src/x.c"): __FILE__ strings end up in the binary
+        src = os.path.relpath(SW_STM32_DIR / rel, out)
+        cmd = [cc] + compile_flags(cfg, rel, kind, target, extra) + ["-c", src, "-o", str(obj)]
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=out)
         return rel, obj, r.returncode, r.stderr
 
