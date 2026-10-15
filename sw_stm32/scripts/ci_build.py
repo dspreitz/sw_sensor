@@ -148,13 +148,13 @@ def level(value, prefix):
     return "-" + (v[0].upper() + v[1:] if prefix == "O" else v) if v else None
 
 
-def compile_flags(cfg, rel, kind, target, extra):
+def compile_flags(cfg, rel, kind, target, extra, out):
     o = cfg.options(rel, kind)
     flags = list(target)
     for key in ("optimization.level", "debuglevel"):
         if key in o:
             flags.append(level(o[key][0], "O" if key.startswith("opt") else "g"))
-    flags += ["-I" + str(resolve(p)) for p in o.get("includepaths", (None, []))[1]]
+    flags += ["-I" + os.path.relpath(resolve(p), out) for p in o.get("includepaths", (None, []))[1]]
     flags += ["-D" + re.sub(r"\s*=\s*", "=", d.strip()) for d in o.get("definedsymbols", (None, []))[1]]
     for key, flag in WARNING_OPTIONS.items():
         if o.get(key, ("false",))[0] == "true":
@@ -207,9 +207,9 @@ def main():
         obj = out / (rel + ".o")
         obj.parent.mkdir(parents=True, exist_ok=True)
         cc = PREFIX + ("g++" if kind == "cpp.compiler" else "gcc")
-        # relative source path like CubeIDE ("../Core/Src/x.c"): __FILE__ strings end up in the binary
+        # relative paths like CubeIDE ("../Core/Src/x.c"): __FILE__ strings end up in the binary
         src = os.path.relpath(SW_STM32_DIR / rel, out)
-        cmd = [cc] + compile_flags(cfg, rel, kind, target, extra) + ["-c", src, "-o", str(obj)]
+        cmd = [cc] + compile_flags(cfg, rel, kind, target, extra, out) + ["-c", src, "-o", str(obj)]
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=out)
         return rel, obj, r.returncode, r.stderr
 
