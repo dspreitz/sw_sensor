@@ -67,7 +67,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
           import json, os
           def load(p):
               return json.load(open(p)) if os.path.exists(p) else None
@@ -102,6 +102,7 @@ jobs:
             sw_stm32/Release-ci/sw_sensor.map
             sw_stm32/Release-ci/compile.log
             summary.json
+            base.json
 
   esp32:
     name: ESP32 (esp32:esp32 ${{ matrix.core }})
@@ -136,7 +137,7 @@ jobs:
             echo
             echo "Warnings in the sketch:"
             grep -E "wlan_link/.*warning" sw_esp32/build.log || echo "none"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
