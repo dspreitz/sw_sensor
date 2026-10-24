@@ -102,6 +102,18 @@ jobs:
             summary.json
             base.json
 
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: UBX receiver (replays tests/data)
+        working-directory: sw_stm32
+        run: |
+          g++ -std=gnu++14 -Wall -Wextra -Werror -I Drivers/Custom tests/UBX_receiver_test.cpp Drivers/Custom/UBX_receiver.cpp -o ubx_test
+          ./ubx_test tests/data | tee -a "$GITHUB_STEP_SUMMARY"
+
   esp32:
     name: ESP32 (esp32:esp32 ${{ matrix.core }})
     runs-on: ubuntu-24.04

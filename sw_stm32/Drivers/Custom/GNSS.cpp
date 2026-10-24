@@ -229,27 +229,38 @@ GNSS_Result GNSS_type::update_delta_F9x(const uint8_t * data)
 	return res;
 }
 
+// The heading message is evaluated first: update() signals new data at its
+// end, so the consumer never sees this epoch's PVT with an old heading.
+// The receiver zeroes the heading frame if the epoch has none.
 GNSS_Result GNSS_type::update_combined ( const uint8_t *data, GNSS_configration_t gnss)
 {
-  GNSS_Result res = GNSS.update(data);
-  if( res != GNSS_HAVE_FIX)
-      return res;
+  const uint8_t *heading = data + sizeof( uBlox_pvt) + 8;
+  bool pvt_fix_ok = data[6 + 21] & 1; // NAV-PVT flags: gnssFixOK
 
-  switch( gnss)
-  {
-    default:
-    case GNSS_TYPE_NOT_DEFINED:
-      ASSERT( 0);
-      break;
-    case GNSS_F9P_F9P:
-      res = GNSS.update_delta_F9x( data + sizeof( uBlox_pvt) + 8);
-      break;
-    case GNSS_X20D:
-      res = GNSS.update_delta_X20D( data + sizeof( uBlox_pvt) + 8);
-      break;
-  }
+  GNSS_Result res = GNSS_ERROR;
+  if( pvt_fix_ok)
+    switch( gnss)
+    {
+      default:
+      case GNSS_TYPE_NOT_DEFINED:
+	ASSERT( 0);
+	break;
+      case GNSS_F9P_F9P:
+	res = update_delta_F9x( heading);
+	break;
+      case GNSS_X20D:
+	res = update_delta_X20D( heading);
+	break;
+    }
 
-  return res;
+  if( res == GNSS_ERROR) // no heading this epoch
+    {
+      coordinates.relPosHeading = 0.0f;
+      coordinates.sat_fix_type &= ~SAT_HEADING;
+    }
+
+  GNSS_Result pvt_res = update( data);
+  return (pvt_res == GNSS_HAVE_FIX) ? res : pvt_res;
 }
 
 void GNSS_type::report_dead_GNSS (void)

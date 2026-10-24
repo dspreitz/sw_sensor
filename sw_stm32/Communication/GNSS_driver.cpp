@@ -27,14 +27,21 @@
 #include "stm32f4xx_hal.h"
 #include "GNSS.h"
 #include "GNSS_driver.h"
+#include "UBX_receiver.h"
 
 #if RUN_GNSS
 
-#define DATA_PACKET_TIMEOUT_MS 250 //
+#define POLL_MS 2	// how often the task looks at the DMA buffer
+#define IDLE_FLUSH_MS 20 // a heading message comes in the same burst as its PVT
+
+static_assert( GPS_DMA_buffer_SIZE == UBX_PVT_FRAME_SIZE, "UBX_receiver: NAV-PVT length");
+static_assert( GPS_RELPOS_DMA_buffer_SIZE == UBX_NAV_RELPOSNED_LENGTH + UBX_FRAME_OVERHEAD, "UBX_receiver: NAV-RELPOSNED length");
+static_assert( GPS_DAHEADING_DMA_buffer_SIZE == UBX_NAV_DAHEADING_LENGTH + UBX_FRAME_OVERHEAD, "UBX_receiver: NAV-DAHEADING length");
 
 COMMON UART_HandleTypeDef huart3;
 COMMON DMA_HandleTypeDef hdma_usart3_rx;
 COMMON  static TaskHandle_t USART3_task_Id = NULL;
+COMMON static UBX_receiver ubx_receiver;
 
 /**
  * @brief USART3 Initialization Function
@@ -63,7 +70,7 @@ static inline void MX_USART3_UART_Init (void)
     hdma_usart3_rx.Init.MemInc = DMA_MINC_ENABLE;
     hdma_usart3_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
     hdma_usart3_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-    hdma_usart3_rx.Init.Mode = DMA_NORMAL;
+    hdma_usart3_rx.Init.Mode = DMA_CIRCULAR;
     hdma_usart3_rx.Init.Priority = DMA_PRIORITY_MEDIUM;
     hdma_usart3_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
     if (HAL_DMA_Init(&hdma_usart3_rx) != HAL_OK)
@@ -106,98 +113,97 @@ COMMON uint64_t delta,start,gnss_max;
 COMMON uint64_t gnss_min=-1;
 #endif
 
+// see documentation/gnss_receive_path.md
+static void process_epoch (GNSS_configration_t gnss)
+{
+#if MEASURE_GNSS_REFRESH_TIME
+  delta = getTime_usec() - start;
+  if( delta >gnss_max)
+    gnss_max=delta;
+  if( delta < gnss_min)
+    gnss_min=delta;
+  start = getTime_usec();
+#endif
+
+  switch( gnss)
+  {
+    case GNSS_M9N:
+    case GNSS_F9P_F9H:
+      GNSS.update (ubx_receiver.epoch ());
+      break;
+    case GNSS_F9P_F9P:
+    case GNSS_X20D:
+      GNSS.update_combined (ubx_receiver.epoch (), gnss);
+      break;
+    default:
+      ASSERT( 0);
+      break;
+  }
+}
+
 void USART_3_runnable (void *GNSS_type)
 {
   GNSS_configration_t gnss = *(GNSS_configration_t *)GNSS_type;
 
-  unsigned buffer_size = 0;
-
   switch( gnss)
   {
-    case GNSS_TYPE_NOT_DEFINED:
-      ASSERT( 0);
-      break;
     case GNSS_M9N:
-      buffer_size = GPS_DMA_buffer_SIZE;
+    case GNSS_F9P_F9H: // the heading comes on UART4, see D_GNSS_driver.cpp
+      ubx_receiver.reset (0);
       break;
     case GNSS_F9P_F9P:
-      buffer_size = GPS_DMA_buffer_SIZE + GPS_RELPOS_DMA_buffer_SIZE;
-      break;
-    case GNSS_F9P_F9H:
-      buffer_size = GPS_DMA_buffer_SIZE;
+      ubx_receiver.reset (UBX_NAV_RELPOSNED_ID);
       break;
     case GNSS_X20D:
-      buffer_size = GPS_DMA_buffer_SIZE + GPS_DAHEADING_DMA_buffer_SIZE;
+      ubx_receiver.reset (UBX_NAV_DAHEADING_ID);
+      break;
+    default:
+      ASSERT( 0);
       break;
   }
 
   USART3_task_Id = xTaskGetCurrentTaskHandle ();
   MX_USART3_UART_Init ();
-  volatile HAL_StatusTypeDef result;
 
   drop_privileges();
 
+  // circular mode: the DMA keeps running, the task follows its write position
+  while (HAL_UART_Receive_DMA (&huart3, USART_3_RX_buffer, USART_3_RX_BUFFER_SIZE) != HAL_OK)
+    {
+      HAL_UART_Abort (&huart3);
+      delay (POLL_MS);
+    }
+
+  unsigned tail = 0;
+  TickType_t last_data = xTaskGetTickCount ();
+  bool idle_handled = true;
+
   while (true)
     {
-
-#if MEASURE_GNSS_REFRESH_TIME
-      delta = getTime_usec() - start;
-      if( delta >gnss_max)
-	gnss_max=delta;
-      if( delta < gnss_min)
-	gnss_min=delta;
-      start = getTime_usec();
-#endif
-
-      result = HAL_UART_Receive_DMA (&huart3, USART_3_RX_buffer, buffer_size);
-      if (result != HAL_OK)
-	{
-	  HAL_UART_Abort (&huart3);
-	  continue;
-	}
-      // wait for half transfer interrupt
       uint32_t pulNotificationValue;
-      BaseType_t notify_result = xTaskNotifyWait(0xffffffff, 0xffffffff,
-						 &pulNotificationValue,
-						 DATA_PACKET_TIMEOUT_MS);
-      if (notify_result != pdTRUE)
+      (void) xTaskNotifyWait (0, 0xffffffff, &pulNotificationValue, POLL_MS);
+
+      unsigned head = (USART_3_RX_BUFFER_SIZE - __HAL_DMA_GET_COUNTER (&hdma_usart3_rx)) % USART_3_RX_BUFFER_SIZE;
+      TickType_t now = xTaskGetTickCount ();
+
+      if (head != tail)
 	{
-	  HAL_UART_Abort (&huart3);
-	  continue;
+	  last_data = now;
+	  idle_handled = false;
 	}
-      // wait for transfer complete interrupt
-      notify_result = xTaskNotifyWait(0xffffffff, 0xffffffff,
-				      &pulNotificationValue,
-				      DATA_PACKET_TIMEOUT_MS);
-      if (notify_result != pdTRUE)
+
+      while (tail != head)
 	{
-	  HAL_UART_Abort (&huart3);
-	  continue;
+	  if (ubx_receiver.feed (USART_3_RX_buffer[tail]))
+	    process_epoch (gnss);
+	  tail = (tail + 1) % USART_3_RX_BUFFER_SIZE;
 	}
-      HAL_UART_Abort (&huart3);
 
-      GNSS_Result result;
-
-      switch( gnss)
-      {
-	default:
-        case GNSS_TYPE_NOT_DEFINED:
-          ASSERT( 0);
-          break;
-        case GNSS_M9N:
-        case GNSS_F9P_F9H:
-          result = GNSS.update (USART_3_RX_buffer);
-          break;
-        case GNSS_F9P_F9P:
-        case GNSS_X20D:
-          result = GNSS.update_combined (USART_3_RX_buffer, gnss);
-          break;
-      }
-
-      if (result == GNSS_ERROR)
+      if (!idle_handled && (now - last_data >= pdMS_TO_TICKS(IDLE_FLUSH_MS)))
 	{
-	  HAL_UART_Abort (&huart3);
-	  delay (50);
+	  if (ubx_receiver.flush ())
+	    process_epoch (gnss);
+	  idle_handled = true;
 	}
     }
 }
