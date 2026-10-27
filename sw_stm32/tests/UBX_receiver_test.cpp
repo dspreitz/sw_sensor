@@ -250,6 +250,7 @@ int main (int argc, char **argv)
   std::string dir = argc > 1 ? argv[1] : "tests/data";
   replay (dir + "/f9p_hpg151_baseboard-outputs_10hz_usb_30s", UBX_NAV_RELPOSNED_ID);
   replay (dir + "/f9p_hpg151_pvt-relposned_10hz_usb_30s", UBX_NAV_RELPOSNED_ID);
+  replay (dir + "/f9p_hpg151_sapos-rtk-fixed_pvt-relposned_10hz_usb_30s", UBX_NAV_RELPOSNED_ID);
   replay (dir + "/x20d_hdg200_pvt-daheading_10hz_usb_30s", UBX_NAV_DAHEADING_ID);
   std::printf (failures ? "%d FAILED\n" : "all passed\n", failures);
   return failures != 0;
