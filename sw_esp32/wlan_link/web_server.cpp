@@ -1491,6 +1491,17 @@ static void handleCaptivePortalProbe (void)
     server.send (404, "text/plain", "Not found");
 }
 
+//!< EXPERIMENT (#266/#269): answer Android's connectivity check with the
+//!< "204 No Content" it expects from an internet-connected network, instead
+//!< of the captive-portal redirect.
+static void handleAndroidProbe204 (void)
+{
+  if (wifiConfigCurrentMode () == WIFI_CONFIG_MODE_AP)
+    server.send (204, "text/plain", "");
+  else
+    server.send (404, "text/plain", "Not found");
+}
+
 static void handleNotFound (void)
 {
   if (wifiConfigCurrentMode () == WIFI_CONFIG_MODE_AP && ! isOwnHost (server.hostHeader ()))
@@ -1518,8 +1529,8 @@ void setupWebServer (void)
   server.on ("/wifi/ap_auto_off", HTTP_POST, handleApAutoOffSave);
 
   // EXPERIMENTAL captive portal (#266): connectivity checks
-  server.on ("/generate_204", HTTP_GET, handleCaptivePortalProbe);         // Android
-  server.on ("/gen_204", HTTP_GET, handleCaptivePortalProbe);              // Android
+  server.on ("/generate_204", HTTP_GET, handleAndroidProbe204);           // Android
+  server.on ("/gen_204", HTTP_GET, handleAndroidProbe204);                // Android
   server.on ("/hotspot-detect.html", HTTP_GET, handleCaptivePortalProbe);  // iOS, macOS
   server.on ("/connecttest.txt", HTTP_GET, handleCaptivePortalProbe);      // Windows
   server.on ("/ncsi.txt", HTTP_GET, handleCaptivePortalProbe);             // Windows
