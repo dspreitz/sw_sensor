@@ -70,8 +70,6 @@ COMMON Queue < communicator_command_t> communicator_command_queue(2);
 extern RestrictedTask NMEA_task;
 extern RestrictedTask communicator_task;
 
-static ROM bool TRUE=true;
-static ROM bool FALSE=false;
 static ROM float year_2000 = 3.12969516e-34f;
 
 void report_horizon_avalability( void)
@@ -85,7 +83,7 @@ void report_horizon_avalability( void)
 	return;
     }
 
-  if( coordinates.sat_fix_type == 0) // no date available
+  if( (coordinates.sat_fix_type & 0x01) == 0) // no GNSS lock -> no date available
     {
 	update_system_state_set( HORIZON_NOT_AVAILABLE);
 	return;
@@ -107,7 +105,7 @@ static ROM TaskParameters_t usart_3_task_param =
       USART_3_runnable,
       "USART3",
       256,
-      (void *)&TRUE,
+      0,
       (STANDARD_TASK_PRIORITY+1) | portPRIVILEGE_BIT, // first: start privileged
       0,
     {
@@ -132,16 +130,18 @@ communicator_runnable (void*)
   organizer_t organizer;
   organizer.initialize_before_measurement ();
 
-  GNSS_configration_t GNSS_configuration = (GNSS_configration_t) round (
-      configuration (GNSS_CONFIGURATION));
+  GNSS_configration_t GNSS_configuration =
+      (GNSS_configration_t) round ( configuration (GNSS_CONFIGURATION));
   organizer.set_GNSS_type (GNSS_configuration); // required for speed accuracy monitoring limit value
 
   switch (GNSS_configuration)
     {
     case GNSS_M9N:
+    case GNSS_F9P_F9P:
+    case GNSS_X20D:
       {
 	TaskParameters_t parameters = usart_3_task_param;
-	parameters.pvParameters = (void*) &FALSE;
+	parameters.pvParameters = (void*) &GNSS_configuration;
 
 	acquire_privileges ();
 	RestrictedTask t (parameters);
@@ -152,7 +152,7 @@ communicator_runnable (void*)
       {
 	  {
 	    TaskParameters_t parameters = usart_3_task_param;
-	    parameters.pvParameters = (void*) &FALSE;
+	    parameters.pvParameters = (void*) &GNSS_configuration;
 
 	    acquire_privileges ();
 	    RestrictedTask t (parameters);
@@ -163,14 +163,8 @@ communicator_runnable (void*)
 	  }
       }
       break;
-    case GNSS_F9P_F9P: // no extra task for 2nd GNSS module
-      {
-	acquire_privileges ();
-	RestrictedTask t (usart_3_task_param);
-	drop_privileges();
-      }
-      break;
     default:
+      ASSERT( 0);
       break;
     }
 
@@ -211,7 +205,7 @@ communicator_runnable (void*)
 	    update_system_state_set (D_GNSS_AVAILABLE);
 
 	  if ((have_first_GNSS_fix == false)
-	      && (coordinates.sat_fix_type != SAT_FIX_NONE))
+	      && ((coordinates.sat_fix_type & 0x03) != SAT_FIX_NONE))
 	    {
 	      have_first_GNSS_fix = true;
 	      organizer.update_magnetic_induction_data (coordinates.latitude,
@@ -282,7 +276,8 @@ communicator_runnable (void*)
 	{
 	case GNSS_F9P_F9H:
 	case GNSS_F9P_F9P:
-	  switch (coordinates.sat_fix_type)
+	case GNSS_X20D:
+	  switch (coordinates.sat_fix_type & 0x03) // test only the "fix" and "heading" bits here
 	    {
 	    case SAT_FIX:
 	      HAL_GPIO_WritePin (
@@ -302,7 +297,7 @@ communicator_runnable (void*)
 	    }
 	  break;
 	case GNSS_M9N:
-	  if (coordinates.sat_fix_type == SAT_FIX)
+	  if ( (coordinates.sat_fix_type & 0x03) == SAT_FIX)
 	    HAL_GPIO_WritePin (
 		LED_STATUS1_GPIO_Port, LED_STATUS1_Pin,
 		((GNSS_LED_count & 0xe0) == 0xe0) ? GPIO_PIN_SET : GPIO_PIN_RESET);
@@ -378,7 +373,7 @@ communicator_runnable (void*)
 
 	  if ( new_GNSS_data_received.test_and_reset())
 	    {
-	      switch (coordinates.sat_fix_type)
+	      switch (coordinates.sat_fix_type & 0x03)
 		{
 		case SAT_FIX:
 		default:

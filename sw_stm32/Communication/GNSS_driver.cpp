@@ -27,14 +27,21 @@
 #include "stm32f4xx_hal.h"
 #include "GNSS.h"
 #include "GNSS_driver.h"
+#include "signal_flight_event.h"
 
 #if RUN_GNSS
 
-#define DATA_PACKET_TIMEOUT_MS 250 //
+#define HALF_DATA_PACKET_TIMEOUT_MS 25
+#define NEXT_PACKET_DELAY 250
 
 COMMON UART_HandleTypeDef huart3;
 COMMON DMA_HandleTypeDef hdma_usart3_rx;
 COMMON  static TaskHandle_t USART3_task_Id = NULL;
+
+// configuration needed to suppress the superfluous messages on legacy F9P GNSS receivers
+ROM uint8_t config_message_0[] = { 0xb5, 0x62, 0x06, 0x01, 0x08, 0x00, 0x01, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x8b, 0xb5, 0x62, 0x06, 0x01, 0x02, 0x00, 0x01, 0x20, 0x2a, 0x53}; // timegps
+ROM uint8_t config_message_1[] = { 0xb5, 0x62, 0x06, 0x01, 0x08, 0x00, 0x0a, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x40, 0xb5, 0x62, 0x06, 0x01, 0x02, 0x00, 0x0a, 0x0b, 0x1e, 0x50}; // hwmon2
+ROM uint8_t config_message_2[] = { 0xb5, 0x62, 0x06, 0x01, 0x08, 0x00, 0x0a, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x22, 0x32, 0xb5, 0x62, 0x06, 0x01, 0x02, 0x00, 0x0a, 0x09, 0x1c, 0x4e}; // hwmon
 
 /**
  * @brief USART3 Initialization Function
@@ -84,6 +91,9 @@ static inline void MX_USART3_UART_Init (void)
 
     HAL_NVIC_SetPriority (DMA1_Stream1_IRQn, STANDARD_ISR_PRIORITY, 0);
     HAL_NVIC_EnableIRQ (DMA1_Stream1_IRQn);
+
+    HAL_NVIC_SetPriority (USART3_IRQn, STANDARD_ISR_PRIORITY, 0);
+    HAL_NVIC_EnableIRQ (USART3_IRQn);
 }
 
 /**
@@ -101,35 +111,64 @@ DMA1_Stream1_IRQHandler (void)
 uint8_t __ALIGNED(USART_3_RX_BUFFER_SIZE_ROUND_UP) USART_3_RX_buffer[USART_3_RX_BUFFER_SIZE];
 
 #if MEASURE_GNSS_REFRESH_TIME
-uint64_t getTime_usec_privileged(void);
+uint64_t getTime_usec(void);
 COMMON uint64_t delta,start,gnss_max;
 COMMON uint64_t gnss_min=-1;
 #endif
 
-void
-USART_3_runnable (void *using_DGNSS)
+void USART_3_runnable (void *GNSS_type)
 {
-  unsigned buffer_size =
-      *(bool*) using_DGNSS ?
-	  GPS_DMA_buffer_SIZE + GPS_RELPOS_DMA_buffer_SIZE :
-	  GPS_DMA_buffer_SIZE;
+  GNSS_configration_t gnss = *(GNSS_configration_t *)GNSS_type;
+
+  TickType_t last_reception_done;
+  unsigned buffer_size = 0;
+
+  switch( gnss)
+  {
+    case GNSS_TYPE_NOT_DEFINED:
+      ASSERT( 0);
+      break;
+    case GNSS_M9N:
+      buffer_size = GPS_DMA_buffer_SIZE;
+      break;
+    case GNSS_F9P_F9P:
+      buffer_size = GPS_DMA_buffer_SIZE + GPS_RELPOS_DMA_buffer_SIZE;
+      break;
+    case GNSS_F9P_F9H:
+      buffer_size = GPS_DMA_buffer_SIZE;
+      break;
+    case GNSS_X20D:
+      buffer_size = GPS_DMA_buffer_SIZE + GPS_DAHEADING_DMA_buffer_SIZE;
+      break;
+  }
+
+  MX_USART3_UART_Init ();
+  drop_privileges();
 
   USART3_task_Id = xTaskGetCurrentTaskHandle ();
-  MX_USART3_UART_Init ();
+
   volatile HAL_StatusTypeDef result;
 
-  drop_privileges();
+  if( gnss == GNSS_F9P_F9P)
+    {
+	HAL_UART_Transmit_IT (&huart3, (uint8_t *)config_message_0, sizeof(config_message_0));
+	delay(10);
+	HAL_UART_Transmit_IT (&huart3, (uint8_t *)config_message_1, sizeof(config_message_1));
+	delay(10);
+	HAL_UART_Transmit_IT (&huart3, (uint8_t *)config_message_2, sizeof(config_message_2));
+	delay(10);
+    }
 
   while (true)
     {
 
 #if MEASURE_GNSS_REFRESH_TIME
-      delta = getTime_usec_privileged() - start;
+      delta = getTime_usec() - start;
       if( delta >gnss_max)
 	gnss_max=delta;
       if( delta < gnss_min)
 	gnss_min=delta;
-      start = getTime_usec_privileged();
+      start = getTime_usec();
 #endif
 
       result = HAL_UART_Receive_DMA (&huart3, USART_3_RX_buffer, buffer_size);
@@ -140,37 +179,64 @@ USART_3_runnable (void *using_DGNSS)
 	}
       // wait for half transfer interrupt
       uint32_t pulNotificationValue;
-      BaseType_t notify_result = xTaskNotifyWait(0xffffffff, 0xffffffff,
-						 &pulNotificationValue,
-						 DATA_PACKET_TIMEOUT_MS);
+      BaseType_t notify_result = xTaskNotifyWait(
+	  0xffffffff, 0xffffffff, &pulNotificationValue, NEXT_PACKET_DELAY);
+
+      last_reception_done = xTaskGetTickCount();
+
       if (notify_result != pdTRUE)
 	{
 	  HAL_UART_Abort (&huart3);
+	  signal_debug_event( GNSS_TIMEOUT_HALF, notify_result & 0xffff);
 	  continue;
 	}
       // wait for transfer complete interrupt
       notify_result = xTaskNotifyWait(0xffffffff, 0xffffffff,
 				      &pulNotificationValue,
-				      DATA_PACKET_TIMEOUT_MS);
+				      HALF_DATA_PACKET_TIMEOUT_MS);
       if (notify_result != pdTRUE)
 	{
 	  HAL_UART_Abort (&huart3);
+	  signal_debug_event( GNSS_TIMEOUT_FULL, notify_result & 0xffff);
 	  continue;
 	}
+
       HAL_UART_Abort (&huart3);
 
       GNSS_Result result;
-      if (buffer_size == GPS_DMA_buffer_SIZE + GPS_RELPOS_DMA_buffer_SIZE)
-	result = GNSS.update_combined (USART_3_RX_buffer);
-      else
-	result = GNSS.update (USART_3_RX_buffer);
 
-      if (result == GNSS_ERROR)
+      switch( gnss)
+      {
+	default:
+        case GNSS_TYPE_NOT_DEFINED:
+          ASSERT( 0);
+          break;
+        case GNSS_M9N:
+        case GNSS_F9P_F9H:
+          result = GNSS.update (USART_3_RX_buffer);
+          break;
+        case GNSS_F9P_F9P:
+        case GNSS_X20D:
+          result = GNSS.update_combined (USART_3_RX_buffer, gnss);
+          break;
+      }
+#if 1
+      if ( result >= GNSS_ERROR_1)
 	{
-	  HAL_UART_Abort (&huart3);
-	  delay (50);
+	  signal_debug_event( (debug_points)GNSS_DATA_ERROR, result & 0xffff);
 	}
+#endif
+      GNSS_new_data_ready.set();
     }
 }
+
+/**
+ * @brief This function handles USART 2 global interrupt.
+ */
+extern "C" void USART3_IRQHandler (void)
+{
+  HAL_UART_IRQHandler (&huart3);
+}
+
 
 #endif

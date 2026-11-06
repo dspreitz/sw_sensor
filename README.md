@@ -36,6 +36,20 @@ Pull latest changes:
 - Release used for release versions (Max. optimized, no debug info)
 - Debug used for development
 
+# Release toolchain
+Releases are built with **STM32CubeIDE 2.2.0**, i.e. with the compiler
+*GNU Tools for STM32 14.3.rel1.20251027-0700* (GCC 14.3.1). The expected
+compiler identification is recorded in `sw_stm32/scripts/release_toolchain.txt`,
+and `build_firmware.py` checks every build against it. The language standards
+are set explicitly in the project: C `gnu11` and C++ `gnu++14`, the values
+STM32CubeIDE used implicitly for releases 0.7.4 and 0.7.6 (recorded in the
+debug information of their ELF files).
+
+Release 0.7.6 was built with STM32CubeIDE 1.19.0 (GCC 13.3.1). Changing the
+release compiler is a deliberate step: update
+`release_toolchain.txt`, this section and the CI toolchain versions together,
+and run the tests from `release_creation.md`.
+
 # Building firmware from the command line
 Python dependencies (from the repository root):
 
@@ -48,7 +62,7 @@ build mode) and ESP32 (via `arduino-cli`) firmware:
 
     python3 build_firmware_all.py
 
-This leaves 5 files in the gitignored `build/` directory, all tagged with
+This leaves 6 files in the gitignored `build/` directory, all tagged with
 the same `<version>` (from `git describe`):
 - `larus_sensor_stm32_v<version>.bin` — STM32 update image for the SD
   card or the ESP32 web UI's "STM32 firmware update" section.
@@ -60,6 +74,9 @@ the same `<version>` (from `git describe`):
 - `larus_sensor_esp32_v<version>.flash1_boot.bin` /
   `...flash2_app.bin` — ESP32 images for a from-scratch USB flash via
   esptool-js (see `sw_esp32/README.md`), not used from the web UI.
+- `larus_sensor_esp32_v<version>.setup.html` — single-file browser page
+  with the two images above built in: initial ESP32 flash over USB plus
+  the printable WiFi label (see `sw_esp32/README.md`).
 
 The two files needed to update a sensor from its own web UI are the first
 and third: `larus_sensor_stm32_v<version>.bin` and
@@ -82,9 +99,9 @@ Use the STM32CubeProgrammer to flash the binary to the STM32 micro-controller.
   updates and `*.lrsx` log file management. WiFi AP SSID/password are
   generated automatically per device, not set manually.
 - See `sw_esp32/README.md` for build/flash instructions, including an
-  initial flash straight from the browser via
-  [esptool-js](https://espressif.github.io/esptool-js/), no local
-  toolchain needed.
+  initial flash straight from the browser with the single-file
+  `larus_sensor_esp32_v<version>.setup.html` page (release asset), no
+  local toolchain needed.
 
 ## Prepare an sd-card with configuration files
 - put a larus_sensor_config.ini file (template in configuration/) in the sd cards root directory. Adjust the parameters as described in configuration/README.md
