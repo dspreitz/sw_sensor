@@ -34,6 +34,9 @@
 #define HALF_DATA_PACKET_TIMEOUT_MS 25
 #define NEXT_PACKET_DELAY 250
 
+extern D_GNSS_coordinates_t coordinates; // communicator.cpp
+extern Mutex GNSS_data_guard;            // GNSS.cpp
+
 COMMON UART_HandleTypeDef huart3;
 COMMON DMA_HandleTypeDef hdma_usart3_rx;
 COMMON  static TaskHandle_t USART3_task_Id = NULL;
@@ -196,8 +199,25 @@ void USART_3_runnable (void *GNSS_type)
 				      HALF_DATA_PACKET_TIMEOUT_MS);
       if (notify_result != pdTRUE)
 	{
+	  // bytes received so far - read before the abort resets the DMA
+	  unsigned received = buffer_size - __HAL_DMA_GET_COUNTER (huart3.hdmarx);
 	  HAL_UART_Abort (&huart3);
 	  signal_debug_event( GNSS_TIMEOUT_FULL, notify_result & 0xffff);
+
+	  // The heading message of this epoch is missing: an X20D without a
+	  // valid heading sends NAV-DAHEADING only once per second, an F9P rover
+	  // without RELPOSNED none at all (#264). If the frame starts with a
+	  // complete NAV-PVT, use it without heading instead of losing position
+	  // and velocity as well. GNSS.update() checks preamble and checksum.
+	  if (((gnss == GNSS_F9P_F9P) || (gnss == GNSS_X20D))
+	      && (received >= GPS_DMA_buffer_SIZE)
+	      && (GNSS.update (USART_3_RX_buffer) < GNSS_ERROR_1))
+	    {
+	      GNSS_data_guard.lock ();
+	      coordinates.sat_fix_type &= ~SAT_HEADING; // no heading in this epoch
+	      GNSS_data_guard.release ();
+	      GNSS_new_data_ready.set ();
+	    }
 	  continue;
 	}
 
