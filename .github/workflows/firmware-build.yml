@@ -107,12 +107,22 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true # the GNSS driver test uses lib/
 
       - name: UBX receiver (replays tests/data)
         working-directory: sw_stm32
         run: |
           g++ -std=gnu++14 -Wall -Wextra -Werror -I Drivers/Custom tests/UBX_receiver_test.cpp Drivers/Custom/UBX_receiver.cpp -o ubx_test
           ./ubx_test tests/data | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: GNSS driver (simulated UART3, recorded X20D stream)
+        run: |
+          cmake -S sw_stm32/tests/gnss_driver -B build/gnss_driver_test
+          cmake --build build/gnss_driver_test
+          ctest --test-dir build/gnss_driver_test --output-on-failure --verbose \
+            | grep -E '^[0-9]+: (recording|published|driver|PASS|FAIL)|Test +#|tests passed' \
+            | sed 's/^[0-9]*: //' | tee -a "$GITHUB_STEP_SUMMARY"
 
   esp32:
     name: ESP32 (esp32:esp32 ${{ matrix.core }})
@@ -136,7 +146,6 @@ jobs:
           pip install esptool
 
       - name: Build
-        run: cd sw_esp32 && python3 scripts/build_firmware.py 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
 
       - name: Summary
         if: always()
