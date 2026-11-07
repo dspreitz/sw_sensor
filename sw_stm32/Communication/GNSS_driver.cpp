@@ -28,6 +28,7 @@
 #include "GNSS.h"
 #include "GNSS_driver.h"
 #include "UBX_receiver.h"
+#include "signal_flight_event.h"
 
 #if RUN_GNSS
 
@@ -42,6 +43,11 @@ COMMON UART_HandleTypeDef huart3;
 COMMON DMA_HandleTypeDef hdma_usart3_rx;
 COMMON  static TaskHandle_t USART3_task_Id = NULL;
 COMMON static UBX_receiver ubx_receiver;
+
+// configuration needed to suppress the superfluous messages on legacy F9P GNSS receivers
+ROM uint8_t config_message_0[] = { 0xb5, 0x62, 0x06, 0x01, 0x08, 0x00, 0x01, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x8b, 0xb5, 0x62, 0x06, 0x01, 0x02, 0x00, 0x01, 0x20, 0x2a, 0x53}; // timegps
+ROM uint8_t config_message_1[] = { 0xb5, 0x62, 0x06, 0x01, 0x08, 0x00, 0x0a, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x40, 0xb5, 0x62, 0x06, 0x01, 0x02, 0x00, 0x0a, 0x0b, 0x1e, 0x50}; // hwmon2
+ROM uint8_t config_message_2[] = { 0xb5, 0x62, 0x06, 0x01, 0x08, 0x00, 0x0a, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x22, 0x32, 0xb5, 0x62, 0x06, 0x01, 0x02, 0x00, 0x0a, 0x09, 0x1c, 0x4e}; // hwmon
 
 /**
  * @brief USART3 Initialization Function
@@ -125,20 +131,26 @@ static void process_epoch (GNSS_configration_t gnss)
   start = getTime_usec();
 #endif
 
+  GNSS_Result result = GNSS_ERROR_1;
   switch( gnss)
   {
     case GNSS_M9N:
     case GNSS_F9P_F9H:
-      GNSS.update (ubx_receiver.epoch ());
+      result = GNSS.update (ubx_receiver.epoch ());
       break;
     case GNSS_F9P_F9P:
     case GNSS_X20D:
-      GNSS.update_combined (ubx_receiver.epoch (), gnss);
+      result = GNSS.update_combined (ubx_receiver.epoch (), gnss);
       break;
     default:
       ASSERT( 0);
       break;
   }
+
+  if( result >= GNSS_ERROR_1)
+    signal_debug_event( GNSS_DATA_ERROR, result & 0xffff);
+  else
+    GNSS_new_data_ready.set();
 }
 
 void USART_3_runnable (void *GNSS_type)
@@ -166,6 +178,16 @@ void USART_3_runnable (void *GNSS_type)
   MX_USART3_UART_Init ();
 
   drop_privileges();
+
+  if( gnss == GNSS_F9P_F9P)
+    {
+	HAL_UART_Transmit_IT (&huart3, (uint8_t *)config_message_0, sizeof(config_message_0));
+	delay(10);
+	HAL_UART_Transmit_IT (&huart3, (uint8_t *)config_message_1, sizeof(config_message_1));
+	delay(10);
+	HAL_UART_Transmit_IT (&huart3, (uint8_t *)config_message_2, sizeof(config_message_2));
+	delay(10);
+    }
 
   // circular mode: the DMA keeps running, the task follows its write position
   while (HAL_UART_Receive_DMA (&huart3, USART_3_RX_buffer, USART_3_RX_BUFFER_SIZE) != HAL_OK)
