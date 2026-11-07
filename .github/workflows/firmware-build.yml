@@ -146,6 +146,7 @@ jobs:
           pip install esptool
 
       - name: Build
+        run: cd sw_esp32 && python3 scripts/build_firmware.py 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
 
       - name: Summary
         if: always()
