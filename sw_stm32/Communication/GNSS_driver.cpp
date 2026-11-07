@@ -113,6 +113,38 @@ DMA1_Stream1_IRQHandler (void)
 
 uint8_t __ALIGNED(USART_3_RX_BUFFER_SIZE_ROUND_UP) USART_3_RX_buffer[USART_3_RX_BUFFER_SIZE];
 
+#define LINE_IDLE_MS 3		// > 30 byte times at 115200 baud
+#define LINE_IDLE_MAX_TRIES 50	// give up waiting after about 200 ms
+
+/**
+ * @brief Wait until the receiver pauses, i.e. we are between two messages.
+ *
+ * The DMA frame only makes sense if it starts at a message boundary.
+ * Restarting the reception while a message is coming in - e.g. a heading
+ * message arriving close to the full-transfer timeout - shifts every
+ * following frame by the same number of bytes. With heading messages in
+ * every epoch each frame then still completes, but never parses (#264).
+ * Within a message the bytes come back to back, so a few ms of silence
+ * means the next byte starts a new message.
+ */
+static void wait_for_line_idle (unsigned buffer_size)
+{
+  for (unsigned tries = 0; tries < LINE_IDLE_MAX_TRIES; ++tries)
+    {
+      if (HAL_UART_Receive_DMA (&huart3, USART_3_RX_buffer, buffer_size) != HAL_OK)
+	{
+	  HAL_UART_Abort (&huart3);
+	  continue;
+	}
+      delay (LINE_IDLE_MS);
+      unsigned received = buffer_size - __HAL_DMA_GET_COUNTER (huart3.hdmarx);
+      HAL_UART_Abort (&huart3);
+      if (received == 0)
+	break;
+    }
+  (void) ulTaskNotifyTake (pdTRUE, 0); // drop DMA notifications from above
+}
+
 #if MEASURE_GNSS_REFRESH_TIME
 uint64_t getTime_usec(void);
 COMMON uint64_t delta,start,gnss_max;
@@ -218,6 +250,8 @@ void USART_3_runnable (void *GNSS_type)
 	      GNSS_data_guard.release ();
 	      GNSS_new_data_ready.set ();
 	    }
+	  // a late message may be coming in right now - don't restart inside it
+	  wait_for_line_idle (buffer_size);
 	  continue;
 	}
 
@@ -240,12 +274,15 @@ void USART_3_runnable (void *GNSS_type)
           result = GNSS.update_combined (USART_3_RX_buffer, gnss);
           break;
       }
-#if 1
       if ( result >= GNSS_ERROR_1)
 	{
 	  signal_debug_event( (debug_points)GNSS_DATA_ERROR, result & 0xffff);
+	  // The coordinates have not been updated (or only partly): don't
+	  // hand them out again as new data. Most likely the frame is out of
+	  // step with the messages - resynchronize (#264).
+	  wait_for_line_idle (buffer_size);
+	  continue;
 	}
-#endif
       GNSS_new_data_ready.set();
     }
 }
